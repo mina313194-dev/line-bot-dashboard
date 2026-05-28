@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>咕嚕群組 消費分析</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f7; color: #1d1d1f; }
+  .header { background: #fff; padding: 16px 20px; border-bottom: 1px solid #e5e5e5; position: sticky; top: 0; z-index: 10; }
+  .header h1 { font-size: 17px; font-weight: 600; }
+  .header p { font-size: 12px; color: #888; margin-top: 2px; }
+  .month-tabs { display: flex; gap: 8px; padding: 12px 16px; overflow-x: auto; background: #fff; border-bottom: 1px solid #e5e5e5; }
+  .tab { padding: 6px 14px; border-radius: 20px; font-size: 13px; border: 1px solid #ddd; background: #fff; cursor: pointer; white-space: nowrap; }
+  .tab.active { background: #1d1d1f; color: #fff; border-color: #1d1d1f; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 14px 16px; }
+  .stat { background: #fff; border-radius: 12px; padding: 14px 10px; text-align: center; }
+  .stat-num { font-size: 18px; font-weight: 600; }
+  .stat-lbl { font-size: 11px; color: #888; margin-top: 3px; }
+  .up { color: #e5383b; } .down { color: #2d9c56; }
+  .section { background: #fff; margin: 0 16px 12px; border-radius: 12px; padding: 16px; }
+  .section h2 { font-size: 14px; font-weight: 600; margin-bottom: 14px; color: #333; }
+  .chart-wrap { position: relative; height: 220px; }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .bar-label { font-size: 12px; color: #555; width: 48px; text-align: right; flex-shrink: 0; }
+  .bar-track { flex: 1; background: #f0f0f0; border-radius: 6px; height: 22px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 6px; display: flex; align-items: center; padding-left: 8px; font-size: 11px; color: #fff; font-weight: 500; }
+  .pay-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+  .pay-row:last-child { border-bottom: none; }
+  .pay-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; flex-shrink: 0; }
+  .c-bar { height: 14px; border-radius: 4px; display: flex; align-items: center; padding-left: 6px; font-size: 10px; color: #fff; margin-bottom: 3px; }
+  .loading { text-align: center; padding: 60px 20px; color: #888; font-size: 14px; }
+  .error { text-align: center; padding: 40px 20px; color: #e5383b; font-size: 13px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📊 咕嚕群組 消費分析</h1>
+  <p id="update-time">載入中...</p>
+</div>
+<div class="month-tabs" id="month-tabs"></div>
+<div id="main-content"><div class="loading">⏳ 資料載入中...</div></div>
+
+<script>
+const SHEET_ID = "1nSQOisaQ8fIC6D1gioRwutFWAFdc084SIxtG9ZLtTSc";
+const SHEET_NAME = "分帳";
+const GROUP_NAME = "咕嚕咕嚕";
+const COLORS = ["#5DCAA5","#7F77DD","#EF9F27","#D85A30","#378ADD","#D4537E","#639922","#BA7517"];
+
+let allRecords = [], months = [], currentMonth = "";
+
+async function loadData() {
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(SHEET_NAME)}`;
+    const res = await fetch(url);
+    const csv = await res.text();
+    const rows = csvParse(csv);
+    if (rows.length < 2) throw new Error("無資料");
+    const headers = rows[0];
+    allRecords = rows.slice(1).map(row => {
+      const obj = {};
+      headers.forEach((h, i) => obj[h.trim()] = (row[i] || "").trim());
+      return obj;
+    }).filter(r => r["群組"] === GROUP_NAME && r["日期"]);
+    buildMonths();
+  } catch(e) {
+    document.getElementById("main-content").innerHTML = `<div class="error">⚠️ 資料載入失敗<br><small>${e.message}</small></div>`;
+  }
+}
+
+function csvParse(text) {
+  const rows = [];
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const cols = [];
+    let cur = "", inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQ = !inQ; continue; }
+      if (ch === ',' && !inQ) { cols.push(cur); cur = ""; continue; }
+      cur += ch;
+    }
+    cols.push(cur);
+    rows.push(cols);
+  }
+  return rows;
+}
+
+function buildMonths() {
+  const s = new Set();
+  allRecords.forEach(r => { const d = r["日期"]; if (d && d.length >= 7) s.add(d.substring(0,7)); });
+  months = Array.from(s).sort().reverse().slice(0,6);
+  if (!months.length) { document.getElementById("main-content").innerHTML = `<div class="error">尚無消費記錄</div>`; return; }
+  currentMonth = months[0];
+  renderTabs(); renderPage();
+}
+
+function renderTabs() {
+  document.getElementById("month-tabs").innerHTML = months.map(m => {
+    const [y, mo] = m.split("/");
+    return `<div class="tab ${m===currentMonth?"active":""}" onclick="switchMonth('${m}')">${y}年${parseInt(mo)}月</div>`;
+  }).join("");
+}
+
+function switchMonth(m) { currentMonth = m; renderTabs(); renderPage(); }
+function filterMonth(m) { return allRecords.filter(r => (r["日期"]||"").startsWith(m)); }
+
+function renderPage() {
+  const records = filterMonth(currentMonth);
+  const [y, mo] = currentMonth.split("/");
+  const pd = new Date(parseInt(y), parseInt(mo)-2, 1);
+  const pm = `${pd.getFullYear()}/${String(pd.getMonth()+1).padStart(2,"0")}`;
+  const prevRec = filterMonth(pm);
+
+  const total = records.reduce((s,r)=>s+parseInt(r["金額"]||0),0);
+  const prevTotal = prevRec.reduce((s,r)=>s+parseInt(r["金額"]||0),0);
+  const diff = prevTotal>0 ? Math.round((total-prevTotal)/prevTotal*100) : null;
+  const diffText = diff!==null ? (diff>0?`↑${diff}%`:`↓${Math.abs(diff)}%`) : "－";
+  const diffClass = diff!==null ? (diff>0?"up":"down") : "";
+
+  const catMap = {};
+  records.forEach(r => { const c=r["類別"]||"其他"; catMap[c]=(catMap[c]||0)+parseInt(r["金額"]||0); });
+  const sortedCats = Object.entries(catMap).sort((a,b)=>b[1]-a[1]);
+  const topCat = sortedCats[0]?sortedCats[0][0]:"－";
+
+  const payMap = {};
+  records.forEach(r => { const p=r["付款方式"]||"未記錄"; payMap[p]=(payMap[p]||0)+parseInt(r["金額"]||0); });
+
+  const dayMap = {};
+  records.forEach(r => { const d=(r["日期"]||"").substring(5); dayMap[d]=(dayMap[d]||0)+parseInt(r["金額"]||0); });
+  const dayKeys = Object.keys(dayMap).sort();
+
+  const trend6 = months.slice().reverse().map(m=>({
+    label: parseInt(m.split("/")[1])+"月",
+    val: filterMonth(m).reduce((s,r)=>s+parseInt(r["金額"]||0),0)
+  }));
+
+  const prevCatMap = {};
+  prevRec.forEach(r => { const c=r["類別"]||"其他"; prevCatMap[c]=(prevCatMap[c]||0)+parseInt(r["金額"]||0); });
+  const allCats = Array.from(new Set([...Object.keys(catMap),...Object.keys(prevCatMap)]));
+  const maxC = Math.max(...allCats.map(c=>Math.max(catMap[c]||0,prevCatMap[c]||0)),1);
+
+  document.getElementById("update-time").textContent = `更新：${new Date().toLocaleString("zh-TW")}`;
+  document.getElementById("main-content").innerHTML = `
+    <div class="stats">
+      <div class="stat"><div class="stat-num">$${total.toLocaleString()}</div><div class="stat-lbl">${parseInt(mo)}月總消費</div></div>
+      <div class="stat"><div class="stat-num ${diffClass}">${diffText}</div><div class="stat-lbl">較上月</div></div>
+      <div class="stat"><div class="stat-num" style="font-size:14px">${topCat}</div><div class="stat-lbl">最大支出</div></div>
+    </div>
+    <div class="section"><h2>消費類別</h2>
+      ${sortedCats.map(([cat,amt],i)=>{
+        const pct=Math.round(amt/total*100), w=Math.round(amt/sortedCats[0][1]*100);
+        return `<div class="bar-row"><div class="bar-label">${cat}</div><div class="bar-track"><div class="bar-fill" style="width:${w}%;background:${COLORS[i%COLORS.length]}">${pct}%</div></div><div style="font-size:12px;color:#555;width:64px;text-align:right">$${amt.toLocaleString()}</div></div>`;
+      }).join("")}
+    </div>
+    <div class="section"><h2>每日消費趨勢</h2><div class="chart-wrap"><canvas id="dayChart"></canvas></div></div>
+    <div class="section"><h2>付款方式占比</h2>
+      ${Object.entries(payMap).sort((a,b)=>b[1]-a[1]).map(([pay,amt],i)=>{
+        const pct=Math.round(amt/total*100);
+        return `<div class="pay-row"><div style="display:flex;align-items:center"><div class="pay-dot" style="background:${COLORS[i%COLORS.length]}"></div>${pay}</div><div style="display:flex;align-items:center;gap:12px"><span style="color:#888;font-size:12px">${pct}%</span><span style="font-weight:500">$${amt.toLocaleString()}</span></div></div>`;
+      }).join("")}
+    </div>
+    <div class="section"><h2>本月 vs 上月比較</h2>
+      ${allCats.map((cat,i)=>{
+        const cur=catMap[cat]||0, prv=prevCatMap[cat]||0;
+        return `<div style="margin-bottom:12px;font-size:12px;color:#555">${cat}<div class="c-bar" style="width:${Math.max(Math.round(cur/maxC*100),4)}%;background:${COLORS[i%COLORS.length]}">$${cur.toLocaleString()}</div><div class="c-bar" style="width:${Math.max(Math.round(prv/maxC*100),4)}%;background:#ccc;color:#555">$${prv.toLocaleString()}</div></div>`;
+      }).join("")}
+      <div style="display:flex;gap:16px;font-size:11px;color:#888;margin-top:4px"><span>■ 本月</span><span style="color:#ccc">■ 上月</span></div>
+    </div>
+    <div class="section"><h2>近6個月趨勢</h2><div class="chart-wrap"><canvas id="trend6Chart"></canvas></div></div>
+  `;
+
+  new Chart(document.getElementById("dayChart"),{type:"line",data:{labels:dayKeys,datasets:[{data:dayKeys.map(k=>dayMap[k]),borderColor:"#5DCAA5",backgroundColor:"rgba(93,202,165,0.1)",borderWidth:2,pointRadius:3,fill:true,tension:0.3}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>"$"+v.toLocaleString(),font:{size:10}}},x:{ticks:{font:{size:10},maxRotation:0}}},responsive:true,maintainAspectRatio:false}});
+  new Chart(document.getElementById("trend6Chart"),{type:"bar",data:{labels:trend6.map(t=>t.label),datasets:[{data:trend6.map(t=>t.val),backgroundColor:trend6.map((_,i)=>i===trend6.length-1?"#5DCAA5":"#d0f0e6"),borderRadius:6}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>"$"+v.toLocaleString(),font:{size:10}}},x:{ticks:{font:{size:12}}}},responsive:true,maintainAspectRatio:false}});
+}
+
+loadData();
+</script>
+</body>
+</html>
